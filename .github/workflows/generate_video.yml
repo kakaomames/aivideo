@@ -1,0 +1,28 @@
+name: Generate Frames
+on:
+  repository_dispatch:
+    types: [generate_frame_trigger]
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          pip install torch diffusers transformers pillow accelerate
+      - name: Run Generator
+        env:
+          PROMPT: ${{ github.event.client_payload.prompt }}
+          SECONDS: ${{ github.event.client_payload.seconds }}
+        run: |
+          python scripts/generate_frames.py
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: animation-frames
+          path: output_frames/
