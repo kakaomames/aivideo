@@ -6,19 +6,24 @@ from diffusers import StableDiffusionImg2ImgPipeline
 from PIL import Image
 import json
 
-# --- 設定値 ---
-PROMPT = os.getenv("PROMPT", "a cinematic shot of a running cat")
+# --- 環境変数とパラメータ設定 ---
+ACTION_PROMPT = os.getenv("PROMPT", "blinking, hair blowing in the wind")
+CHAR_PROMPT = os.getenv("CHARACTER_PROMPT", "Koishi Komeiji, Touhou Project, green hair, black hat with ribbon, third eye, anime style")
 SECONDS = int(os.getenv("SECONDS", "2"))
-IMAGE_URL = os.getenv("IMAGE_URL") # 必須：ここからスタート画像を取得
-FPS = 5 # 30fpsを作る前の素材なので5で十分！
+IMAGE_URL = os.getenv("IMAGE_URL")
+
+FPS = 5
 FRAMES = SECONDS * FPS
 OUTPUT_DIR = "output_frames"
-IMAGE_SIZE = 256 # CPUで爆速生成するためのサイズ（ブラウザ側で拡大します）
+IMAGE_SIZE = 256
 
-# ディレクトリ作成
+# プロンプトの合体とネガティブプロンプト
+FULL_PROMPT = f"{CHAR_PROMPT}, {ACTION_PROMPT}, masterpiece, high quality"
+NEGATIVE_PROMPT = "noise, blurry, low quality, distorted, bad anatomy, deformed, noise background"
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# 1. スタート画像のダウンロードと準備
+# 1. 画像ダウンロード
 print(f"Downloading start image from: {IMAGE_URL}")
 try:
     response = requests.get(IMAGE_URL, timeout=10)
@@ -27,8 +32,7 @@ except Exception as e:
     print(f"Failed to download image: {e}")
     exit(1)
 
-# 2. モデルの準備 (CPU環境向け最適化)
-# Stable Diffusion 1.5はメモリ消費が比較的安定しています
+# 2. パイプライン準備
 model_id = "runwayml/stable-diffusion-v1-5"
 print("Loading model...")
 pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
@@ -37,37 +41,33 @@ pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
     safety_checker=None
 ).to("cpu")
 
-# メモリ削減の魔法（CPU生成では必須）
 pipe.enable_attention_slicing()
 
-# 3. 画像生成ループ
+# 3. 生成ループ
 print(f"Generating {FRAMES} frames...")
 current_image = init_image
 current_image.save(f"{OUTPUT_DIR}/frame_000.png")
 
 for i in range(1, FRAMES):
-    # プロンプトを微調整（動きを出すため）
-    current_prompt = f"{PROMPT}, frame {i} of {FRAMES}"
-    
-    # Img2Img生成 (strength 0.5-0.6 が連続性を保つコツ)
-    # num_inference_steps=4 は爆速のため。もっと綺麗にしたければ8に変えてください
+    # strength=0.35, steps=12 でキャラクターを極力維持しつつ動かす
     current_image = pipe(
-        prompt=current_prompt, 
+        prompt=FULL_PROMPT,
+        negative_prompt=NEGATIVE_PROMPT,
         image=current_image, 
-        strength=0.51, 
-        num_inference_steps=8
+        strength=0.35, 
+        num_inference_steps=12
     ).images[0]
     
     current_image.save(f"{OUTPUT_DIR}/frame_{i:03d}.png")
     print(f"Saved frame {i}/{FRAMES}")
 
-# 4. ブラウザ用の設計図（メタデータ）保存
+# 4. メタデータ保存
 meta = {
     "width": IMAGE_SIZE,
     "height": IMAGE_SIZE,
     "fps": FPS,
     "total_frames": FRAMES,
-    "prompt": PROMPT
+    "prompt": FULL_PROMPT
 }
 with open(f"{OUTPUT_DIR}/meta.json", "w") as f:
     json.dump(meta, f)
