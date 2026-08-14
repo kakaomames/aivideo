@@ -1,51 +1,75 @@
-# scripts/generate_frames.py
-
 import os
 import torch
+import requests
+from io import BytesIO
 from diffusers import StableDiffusionImg2ImgPipeline
 from PIL import Image
 import json
-import zipfile
 
-# 最小限の設定
-PROMPT = os.getenv("PROMPT", "a cat running")
+# --- 設定値 ---
+PROMPT = os.getenv("PROMPT", "a cinematic shot of a running cat")
 SECONDS = int(os.getenv("SECONDS", "2"))
-FPS = 5  # とりあえず低めで試す（ブラウザで補間するため）
+IMAGE_URL = os.getenv("IMAGE_URL") # 必須：ここからスタート画像を取得
+FPS = 5 # 30fpsを作る前の素材なので5で十分！
 FRAMES = SECONDS * FPS
 OUTPUT_DIR = "output_frames"
+IMAGE_SIZE = 256 # CPUで爆速生成するためのサイズ（ブラウザ側で拡大します）
 
+# ディレクトリ作成
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# 1. モデルロード (CPU設定)
-# 軽量なモデルIDにするのが鍵です（今回は例としてSD 1.5の軽量版など）
-model_id = "runwayml/stable-diffusion-v1-5" 
+# 1. スタート画像のダウンロードと準備
+print(f"Downloading start image from: {IMAGE_URL}")
+try:
+    response = requests.get(IMAGE_URL, timeout=10)
+    init_image = Image.open(BytesIO(response.content)).convert("RGB").resize((IMAGE_SIZE, IMAGE_SIZE))
+except Exception as e:
+    print(f"Failed to download image: {e}")
+    exit(1)
+
+# 2. モデルの準備 (CPU環境向け最適化)
+# Stable Diffusion 1.5はメモリ消費が比較的安定しています
+model_id = "runwayml/stable-diffusion-v1-5"
+print("Loading model...")
 pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
-    model_id, torch_dtype=torch.float32, safety_checker=None
+    model_id, 
+    torch_dtype=torch.float32, 
+    safety_checker=None
 ).to("cpu")
 
-# 2. 生成ループ (Img2Imgで連続性維持)
-init_image = None
-for i in range(FRAMES):
-    # プロンプトを少しずつ変化させると動きが出る
+# メモリ削減の魔法（CPU生成では必須）
+pipe.enable_attention_slicing()
+
+# 3. 画像生成ループ
+print(f"Generating {FRAMES} frames...")
+current_image = init_image
+current_image.save(f"{OUTPUT_DIR}/frame_000.png")
+
+for i in range(1, FRAMES):
+    # プロンプトを微調整（動きを出すため）
     current_prompt = f"{PROMPT}, frame {i} of {FRAMES}"
     
-    if init_image is None:
-        # 最初の1枚はランダムノイズから（Text2Imgの代わり）
-        init_image = pipe(current_prompt, strength=1.0, num_inference_steps=5).images[0]
-    else:
-        # 2枚目以降は前の画像をベースにする (Img2Img)
-        init_image = pipe(current_prompt, image=init_image, strength=0.6, num_inference_steps=5).images[0]
+    # Img2Img生成 (strength 0.5-0.6 が連続性を保つコツ)
+    # num_inference_steps=4 は爆速のため。もっと綺麗にしたければ8に変えてください
+    current_image = pipe(
+        prompt=current_prompt, 
+        image=current_image, 
+        strength=0.55, 
+        num_inference_steps=4
+    ).images[0]
     
-    init_image.save(f"{OUTPUT_DIR}/frame_{i:03d}.png")
+    current_image.save(f"{OUTPUT_DIR}/frame_{i:03d}.png")
+    print(f"Saved frame {i}/{FRAMES}")
 
-# 3. メタデータの作成
+# 4. ブラウザ用の設計図（メタデータ）保存
 meta = {
-    "width": 512, # 生成サイズに合わせて調整
-    "height": 512,
+    "width": IMAGE_SIZE,
+    "height": IMAGE_SIZE,
     "fps": FPS,
-    "total_frames": FRAMES
+    "total_frames": FRAMES,
+    "prompt": PROMPT
 }
 with open(f"{OUTPUT_DIR}/meta.json", "w") as f:
     json.dump(meta, f)
 
-print("Generation Complete!")
+print("All done!")
