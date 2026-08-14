@@ -54,8 +54,8 @@ for i in range(1, FRAMES):
     current_image = pipe(
         prompt=current_prompt, 
         image=current_image, 
-        strength=0.55, 
-        num_inference_steps=4
+        strength=0.51, 
+        num_inference_steps=8
     ).images[0]
     
     current_image.save(f"{OUTPUT_DIR}/frame_{i:03d}.png")
